@@ -1,0 +1,8 @@
+# /etc/mosquitto/acl — 最小权限：每个账号只碰自己的子树（需求 §13）
+# MCP 服务账号：全部显示 topic（它是唯一控制面）
+user muse
+topic readwrite muse/display/#
+
+# 设备账号：只能读写自己的 topic 子树（新设备加一段）
+user desk-cube
+topic readwrite muse/display/desk-cube/#

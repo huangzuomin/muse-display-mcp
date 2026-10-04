@@ -1,0 +1,730 @@
+
+
+# Muse Display MCP 开发需求文档
+
+版本：V0.1  
+目标：完成 Muse 对多种显示设备的统一控制。  
+首批设备：HoloCubic、BOOX。  
+部署位置：树莓派。
+
+## 1. 项目目标
+
+Muse Display MCP 是一个显示设备控制服务。
+
+系统接收 Muse 的显示请求。
+
+系统把请求转换成设备可以执行的命令。
+
+系统把命令发送到指定设备。
+
+系统返回执行结果。
+
+Muse 不直接控制设备。
+
+Muse 不处理设备协议。
+
+Muse 不处理屏幕分辨率。
+
+Muse 只描述显示意图。
+
+系统必须支持以下基本流程：
+
+```text
+Muse
+  ↓
+Muse Display MCP
+  ↓
+Device Registry
+  ↓
+Device Adapter
+  ↓
+Transport
+  ↓
+Display Device
+```
+
+## 2. 第一阶段范围
+
+V0.1 必须支持两类设备：
+
+```text
+HoloCubic
+BOOX
+```
+
+V0.1 必须支持以下显示能力：
+
+```text
+show_text
+show_card
+show_image
+clear
+get_status
+list_devices
+```
+
+V0.1 不实现复杂 Dashboard。
+
+V0.1 不实现视频播放。
+
+V0.1 不实现自由 HTML 页面渲染。
+
+V0.1 不实现设备自动发现。
+
+V0.1 不要求设备直接连接 Muse。
+
+## 3. 系统部署
+
+Muse Display MCP 部署在树莓派上。
+
+树莓派作为本地 AI Hardware Gateway。
+
+建议部署以下服务：
+
+```text
+Raspberry Pi
+├── muse-display-mcp
+├── mqtt-broker
+├── device-registry
+└── local-storage
+```
+
+V0.1 可以不使用 Redis。
+
+系统可以先使用 SQLite 保存状态。
+
+如果后续出现多进程、高并发或任务队列需求，再增加 Redis。
+
+## 4. MCP 工具设计
+
+### 4.1 display.list_devices
+
+用途：
+
+返回系统已注册的显示设备。
+
+输入：
+
+无。
+
+输出示例：
+
+```json
+{
+  "devices": [
+    {
+      "id": "desk-cube",
+      "name": "Desk HoloCubic",
+      "type": "holocubic",
+      "online": true,
+      "capabilities": [
+        "text",
+        "card",
+        "image"
+      ]
+    }
+  ]
+}
+```
+
+系统必须返回设备在线状态。
+
+系统必须返回设备能力。
+
+Muse 根据能力决定是否调用设备。
+
+---
+
+### 4.2 display.show_text
+
+用途：
+
+显示纯文本。
+
+输入：
+
+```json
+{
+  "device_id": "desk-cube",
+  "text": "下午三点召开项目会议",
+  "ttl": 3600
+}
+```
+
+字段说明：
+
+```text
+device_id  必填
+text       必填
+ttl        可选
+```
+
+`ttl` 单位为秒。
+
+`ttl` 到期后，设备恢复默认状态。
+
+如果设备不支持 TTL，Adapter 负责模拟该行为。
+
+---
+
+### 4.3 display.show_card
+
+用途：
+
+显示结构化卡片。
+
+输入：
+
+```json
+{
+  "device_id": "desk-cube",
+  "title": "今日重点",
+  "body": "完成 GEO Core 下一阶段设计",
+  "priority": "normal",
+  "ttl": 3600
+}
+```
+
+V0.1 支持以下 priority：
+
+```text
+low
+normal
+high
+```
+
+Adapter 决定具体视觉样式。
+
+Muse 不指定字体、字号、颜色和坐标。
+
+---
+
+### 4.4 display.show_image
+
+用途：
+
+显示图片。
+
+输入：
+
+```json
+{
+  "device_id": "desk-cube",
+  "image_url": "http://raspberrypi.local/assets/demo.png",
+  "fit": "contain",
+  "ttl": 3600
+}
+```
+
+V0.1 支持：
+
+```text
+contain
+cover
+```
+
+系统必须验证图片是否可访问。
+
+系统必须限制图片尺寸。
+
+Adapter 可以执行缩放和格式转换。
+
+---
+
+### 4.5 display.clear
+
+用途：
+
+清除当前内容。
+
+输入：
+
+```json
+{
+  "device_id": "desk-cube"
+}
+```
+
+设备执行后必须回到默认状态。
+
+---
+
+### 4.6 display.get_status
+
+用途：
+
+读取设备状态。
+
+输入：
+
+```json
+{
+  "device_id": "desk-cube"
+}
+```
+
+输出：
+
+```json
+{
+  "device_id": "desk-cube",
+  "online": true,
+  "state": "displaying",
+  "current_content_id": "content-1024",
+  "updated_at": "2026-10-04T09:30:00+08:00"
+}
+```
+
+## 5. 设备注册表
+
+系统必须提供统一设备注册表。
+
+建议使用 YAML。
+
+示例：
+
+```yaml
+devices:
+
+  desk-cube:
+    name: Desk HoloCubic
+    type: holocubic
+    transport: mqtt
+    topic: muse/display/desk-cube
+    width: 240
+    height: 240
+
+  boox-desk:
+    name: BOOX Desk
+    type: boox
+    transport: http
+    endpoint: http://boox.local:8765
+    width: 1404
+    height: 1872
+```
+
+Muse 不读取这个文件。
+
+Muse 只通过 MCP 查询设备。
+
+## 6. Adapter 设计
+
+所有设备必须通过 Adapter 接入。
+
+所有 Adapter 必须实现统一接口。
+
+建议接口：
+
+```python
+class DisplayAdapter:
+    def show_text(self, payload):
+        pass
+
+    def show_card(self, payload):
+        pass
+
+    def show_image(self, payload):
+        pass
+
+    def clear(self):
+        pass
+
+    def get_status(self):
+        pass
+```
+
+Adapter 负责以下工作：
+
+```text
+转换协议
+转换图片
+转换布局
+处理设备差异
+处理设备错误
+返回执行结果
+```
+
+MCP Server 不包含具体设备逻辑。
+
+## 7. HoloCubic Adapter
+
+HoloCubic 优先使用 MQTT。
+
+建议 Topic：
+
+```text
+muse/display/{device_id}/command
+muse/display/{device_id}/status
+muse/display/{device_id}/event
+```
+
+命令示例：
+
+```json
+{
+  "command_id": "cmd-1001",
+  "command": "show_card",
+  "payload": {
+    "title": "今日重点",
+    "body": "完成 GEO Core 下一阶段设计"
+  },
+  "ttl": 3600
+}
+```
+
+HoloCubic 执行完成后必须返回：
+
+```json
+{
+  "command_id": "cmd-1001",
+  "status": "displayed"
+}
+```
+
+如果执行失败，必须返回：
+
+```json
+{
+  "command_id": "cmd-1001",
+  "status": "failed",
+  "error": "image_decode_failed"
+}
+```
+
+第一版 HoloCubic 固件只实现三种布局：
+
+```text
+text
+card
+image
+```
+
+不要在第一版实现天气、新闻、股票等独立 Widget。
+
+这些内容应由 Muse 组合。
+
+## 8. BOOX Adapter
+
+BOOX Adapter 优先使用现有控制链。
+
+如果已有 HTTP 服务，则继续使用 HTTP。
+
+如果当前链路依赖 ADB，则把 ADB 封装在 Adapter 内。
+
+BOOX Adapter 至少支持：
+
+```text
+显示文本
+显示图片
+刷新屏幕
+清空当前内容
+读取设备在线状态
+```
+
+Muse 不感知 BOOX 使用 HTTP 还是 ADB。
+
+## 9. 内容渲染原则
+
+MCP 发送内容语义。
+
+Adapter 负责视觉表现。
+
+例如：
+
+Muse 发送：
+
+```json
+{
+  "title": "城市信号",
+  "body": "发现 3 条异常信息",
+  "priority": "high"
+}
+```
+
+HoloCubic 可以显示为小型高优先级卡片。
+
+BOOX 可以显示为黑白大字号页面。
+
+两种设备显示结果可以不同。
+
+内容含义必须一致。
+
+## 10. 状态管理
+
+系统必须保存以下状态：
+
+```text
+设备在线状态
+最后一次命令
+最后一次执行结果
+当前显示内容
+当前内容过期时间
+最后心跳时间
+```
+
+建议 V0.1 使用 SQLite。
+
+每条命令必须生成唯一 command_id。
+
+系统必须保存 command_id。
+
+设备返回结果时必须带 command_id。
+
+## 11. 错误处理
+
+系统必须区分以下错误：
+
+```text
+DEVICE_NOT_FOUND
+DEVICE_OFFLINE
+CAPABILITY_NOT_SUPPORTED
+INVALID_PAYLOAD
+TRANSPORT_ERROR
+DEVICE_TIMEOUT
+RENDER_ERROR
+INTERNAL_ERROR
+```
+
+错误信息必须可读。
+
+例如：
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "DEVICE_OFFLINE",
+    "message": "Device desk-cube is offline."
+  }
+}
+```
+
+不要只返回：
+
+```text
+500 Internal Server Error
+```
+
+## 12. 超时规则
+
+单次设备调用必须设置超时。
+
+建议：
+
+```text
+普通命令：5 秒
+图片命令：15 秒
+```
+
+超时后，MCP 返回失败。
+
+系统可以继续等待设备异步回执。
+
+但系统不能让 Muse 无限等待。
+
+## 13. 安全要求
+
+树莓派服务不要直接暴露到公网。
+
+远程访问优先使用：
+
+```text
+Tailscale
+ZeroTier
+WireGuard
+```
+
+MQTT 不允许匿名公网访问。
+
+设备必须使用唯一 device_id。
+
+MCP Server 必须支持身份验证。
+
+API Key 不写入代码仓库。
+
+密钥写入环境变量。
+
+例如：
+
+```text
+MUSE_DISPLAY_TOKEN
+MQTT_USERNAME
+MQTT_PASSWORD
+```
+
+## 14. 日志要求
+
+系统必须记录：
+
+```text
+调用时间
+调用工具
+device_id
+command_id
+执行结果
+执行耗时
+错误信息
+```
+
+日志不要保存敏感正文。
+
+图片 URL 如果包含 Token，应脱敏。
+
+## 15. 推荐代码结构
+
+```text
+muse-display-mcp/
+
+├── src/
+│   ├── server/
+│   │   ├── mcp_server.py
+│   │   └── schemas.py
+│   │
+│   ├── registry/
+│   │   └── device_registry.py
+│   │
+│   ├── adapters/
+│   │   ├── base.py
+│   │   ├── holocubic.py
+│   │   └── boox.py
+│   │
+│   ├── transport/
+│   │   ├── mqtt.py
+│   │   └── http.py
+│   │
+│   ├── renderer/
+│   │   ├── image.py
+│   │   └── card.py
+│   │
+│   └── storage/
+│       └── sqlite.py
+│
+├── config/
+│   └── devices.yaml
+│
+├── tests/
+│
+├── docker/
+│
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+## 16. Docker Compose
+
+建议至少包含两个容器：
+
+```text
+muse-display-mcp
+mosquitto
+```
+
+第一版不必为了架构完整增加 Redis、PostgreSQL、Nginx。
+
+先保证闭环工作。
+
+## 17. MVP 验收标准
+
+V0.1 完成后，必须通过以下测试。
+
+Muse 可以读取设备列表。
+
+Muse 可以给 HoloCubic 显示一段文字。
+
+Muse 可以给 HoloCubic 显示一张卡片。
+
+Muse 可以给 HoloCubic 显示一张图片。
+
+Muse 可以清空 HoloCubic。
+
+Muse 可以获得 HoloCubic 的执行结果。
+
+Muse 可以给 BOOX 显示文字。
+
+Muse 可以给 BOOX 显示图片。
+
+设备离线时，系统必须返回明确错误。
+
+设备恢复上线后，系统必须恢复控制。
+
+更换设备时，不修改 Muse 端工具定义。
+
+增加新设备时，只增加 Adapter 和设备配置。
+
+这是最后一条最重要的验收条件。
+
+## 18. 开发顺序
+
+第一阶段先完成：
+
+```text
+MCP Server
+Device Registry
+Base Adapter
+HoloCubic Adapter
+MQTT
+show_text
+show_card
+clear
+```
+
+先不要碰 BOOX。
+
+HoloCubic 闭环完成后，再做：
+
+```text
+show_image
+状态回执
+TTL
+错误处理
+```
+
+第二阶段再增加 BOOX Adapter。
+
+第三阶段增加：
+
+```text
+任务列表
+二维码
+状态指示
+通知
+Agent thinking 状态
+多屏联动
+```
+
+## 19. 后续演进
+
+后续可以把项目从 Muse Display MCP 提升为：
+
+```text
+Muse Physical I/O
+```
+
+架构变成：
+
+```text
+Muse
+  ↓
+Physical I/O MCP
+  ├── Display
+  ├── Audio
+  ├── Sensor
+  ├── Button
+  ├── Light
+  └── Printer
+```
+
+Display 只是第一个模块。
+
+系统的长期目标不是控制屏幕。
+
+系统的长期目标是给 Agent 提供统一的物理世界接口。
+
+但 V0.1 不做这件事。
+
+V0.1 只证明一件事：
+
+Muse 可以用统一协议，可靠地控制 HoloCubic 和 BOOX 两类屏幕。
+
+这条闭环跑通以后，再往 Physical I/O 扩。

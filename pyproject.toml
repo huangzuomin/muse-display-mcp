@@ -1,0 +1,31 @@
+[project]
+name = "muse-display-mcp"
+version = "0.1.0"
+description = "Unified display device control MCP server (BOOX + HoloCubic) for Raspberry Pi"
+requires-python = ">=3.10"
+dependencies = [
+    # 评审 D2=A：官方 MCP SDK + async 处理器包线程调用同步 Adapter。
+    # 2026-10-04 安装实测 PyPI 2.x 可用（mcp 2.3.0），下限钉定 2。
+    "mcp>=2",
+    "paho-mqtt>=2.0",
+    "PyYAML>=6.0",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+muse-display-mcp = "muse_display.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/muse_display"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

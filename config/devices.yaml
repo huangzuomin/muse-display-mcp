@@ -1,0 +1,34 @@
+# Muse Display 设备注册表（评审 T1：YAML fail-fast，未知键/重复键/类型错直接拒启）
+#
+# 能力码：text / card / image / video / clear / status
+# HoloCubic 视频经 Pi ffmpeg 转换为 MJPEG，再由设备通过 HTTP 拉取。
+# stream_host 必须是设备可访问且 Pi 已绑定的 LAN 地址。
+#   - HoloCubic 当前支持 text/video/clear/status（show_card/image → 补齐轮）
+#   - TTL 持久化归补齐轮
+
+devices:
+  desk-cube:
+    name: HoloCubic 桌面魔方屏
+    type: holocubic
+    transport: mqtt
+    width: 240
+    height: 240
+    capabilities: [text, image, video, clear, status]
+    topic: muse/display/desk-cube
+    broker_host: 127.0.0.1
+    broker_port: 1883
+    stream_host: 192.0.2.10
+
+  boox-desk:
+    name: BOOX NoteX 墨水屏
+    type: boox
+    transport: adb
+    width: 1404
+    height: 1872
+    capabilities: [text, card, image, clear, status]
+    # 双地址回退（executor.py 语义）：LAN 优先，Tailscale 兜底
+    addresses:
+      - 192.0.2.10:5555
+      - 192.0.2.10:5555
+    # show_image prompt= 走的生成管线（--now 模式自带推送）
+    art_script: /home/user/muse-art/daily-art.py

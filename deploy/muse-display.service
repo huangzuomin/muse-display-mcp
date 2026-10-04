@@ -1,0 +1,25 @@
+# systemd 常驻（需求 §3：muse-display-mcp 是树莓派服务；docker 已否决）
+# 安装：
+#   sudo cp deploy/muse-display.service /etc/systemd/system/
+#   sudo mkdir -p /etc/muse-display && sudo cp deploy/env.example /etc/muse-display/env
+#   sudo nano /etc/muse-display/env          # 填真实 token/MQTT 密码
+#   sudo chmod 600 /etc/muse-display/env     # 凭据只归 root（需求 §13）
+#   sudo systemctl daemon-reload && sudo systemctl enable --now muse-display
+# 验证：journalctl -u muse-display -f
+
+[Unit]
+Description=Muse Display MCP (streamable-http)
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+User=user
+WorkingDirectory=/opt/muse-display
+# 凭据只进 env 文件，不进仓库、不进命令行（需求 §13）
+EnvironmentFile=/etc/muse-display/env
+ExecStart=/opt/muse-display/.venv/bin/muse-display-mcp
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
