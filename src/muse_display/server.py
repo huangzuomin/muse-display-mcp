@@ -2,7 +2,8 @@
 
 - mcp FastMCP；async 工具处理器经 anyio.to_thread 调同步 DisplayService
   （评审 D2：async 包线程，适配器保持同步）
-- MUSE_DISPLAY_TOKEN Day 1 强制校验：未设置 → 拒绝启动（评审 T1）
+- MUSE_DISPLAY_TOKEN Day 1 强制校验：未设置 → 拒绝启动（评审 T1）；
+  v0.2 起 HTTP 传输逐请求校验 Bearer（Muse review R1），失败只记次数与来源 IP
 - 配置路径：MUSE_DISPLAY_CONFIG，默认 ./config/devices.yaml
 - MQTT 凭据：MQTT_USERNAME / MQTT_PASSWORD 环境变量（需求 §13，不入仓库）
 - 日志走 stderr：stdio 传输下 stdout 是 MCP 协议通道，日志污染会打断 Muse
@@ -12,6 +13,8 @@ from __future__ import annotations
 
 import atexit
 import functools
+import hmac
+import importlib.metadata
 import logging
 import os
 import sys
@@ -37,6 +40,57 @@ def require_token() -> str:
         )
         raise SystemExit(2)
     return token
+
+
+def _package_version() -> str:
+    """serverInfo.version 随包版本走（Muse review R2），不留给空串。"""
+    try:
+        return importlib.metadata.version("muse-display-mcp")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0-dev"
+
+
+class BearerAuthMiddleware:
+    """纯 ASGI 中间件：逐请求校验 Authorization: Bearer <token>（review R1）。
+
+    缺失/错误一律 401，请求不进入 JSON-RPC 层；失败只记累计次数与来源
+    IP:port，绝不记录 token 明文或其任何片段。
+    """
+
+    def __init__(self, app, token: str):
+        self.app = app
+        self._token = token.strip().encode("utf-8")
+        self._failures = 0
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = {k.lower(): v for k, v in scope.get("headers") or []}
+        scheme, _, credential = headers.get(b"authorization", b"").partition(b" ")
+        if scheme.lower() != b"bearer" or not hmac.compare_digest(
+                credential.strip(), self._token):
+            self._failures += 1
+            client_ip, client_port = scope.get("client") or ("unknown", 0)
+            log.warning("bearer auth rejected #%d from %s:%s",
+                        self._failures, client_ip, client_port)
+            await self._send_401(send)
+            return
+        await self.app(scope, receive, send)
+
+    async def _send_401(self, send):
+        body = (b'{"jsonrpc":"2.0","id":null,'
+                b'"error":{"code":-32000,"message":"unauthorized"}}')
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+                (b"www-authenticate", b'Bearer realm="muse-display"'),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
 
 
 def build_service(config_path: str, *, start_transports: bool = True) -> DisplayService:
@@ -78,7 +132,7 @@ def build_mcp(service: DisplayService):
     import anyio
     from mcp.server.mcpserver import MCPServer  # mcp 2.x（FastMCP 已更名）
 
-    mcp = MCPServer("muse-display")
+    mcp = MCPServer("muse-display", version=_package_version())
 
     def _sync(tool: str, **kwargs) -> dict:
         return service.dispatch(tool, **kwargs)
@@ -152,7 +206,7 @@ def main() -> None:
         stream=sys.stderr,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
-    require_token()
+    token = require_token()
     config_path = os.environ.get(
         "MUSE_DISPLAY_CONFIG", os.path.join("config", "devices.yaml")
     )
@@ -170,14 +224,17 @@ def main() -> None:
     mcp = build_mcp(service)
     # 传输：stdio（MCP 客户端直接拉起，默认）| http（systemd 常驻，需求 §3）。
     # http 模式网络边界（需求 §13）：无公网 IP，仅 LAN/Tailscale 可达；
-    # bearer 中间件归补齐轮，V0.1 靠网络边界 + MUSE_DISPLAY_TOKEN 启动门。
+    # v0.2 起另有逐请求 Bearer 校验（review R1），token 与启动门同源。
     transport = os.environ.get("MUSE_DISPLAY_TRANSPORT", "stdio").strip().lower()
     if transport in ("http", "streamable-http", "sse"):
+        import uvicorn
+
         host = os.environ.get("MUSE_DISPLAY_HTTP_HOST", "0.0.0.0")
         port = int(os.environ.get("MUSE_DISPLAY_HTTP_PORT", "8080"))
-        log.info("serving streamable-http on %s:%d (path /mcp)", host, port)
-        # mcp 2.x：host/port 直接作为 run 参数（1.x 才走 settings）
-        mcp.run(transport="streamable-http", host=host, port=port)
+        app = BearerAuthMiddleware(mcp.streamable_http_app(host=host), token)
+        log.info("serving streamable-http on %s:%d (path /mcp, bearer required)",
+                 host, port)
+        uvicorn.run(app, host=host, port=port, log_level="info")
     else:
         mcp.run()  # stdio
 
